@@ -1,88 +1,183 @@
-let allQuestions = [];
-let currentQuestions = [];
+let allQuestions = { single_choice: [], multiple_choice: [], true_false: [] };
+let questions = [];
 let currentIndex = 0;
+let selectedOptions = new Set();
+let isAnswered = false;
 let score = 0;
 
+// 随机抽取函数
+function getRandomSubset(array, count) {
+  const shuffled = array.sort(() => 0.5 - Math.random());
+  return shuffled.slice(0, count);
+}
+
+// 加载题库
 async function loadQuestions() {
-  const response = await fetch("题库.json");
-  const data = await response.json();
+  try {
+    const res = await fetch('./题库.json');
+    const data = await res.json();
+    allQuestions = data;
+    generateNewSet();
+  } catch (err) {
+    document.getElementById('question').textContent = '❌ 题库加载失败，请检查路径';
+    console.error(err);
+  }
+}
 
-  const single = shuffle(data.single_choice).slice(0, 20);
-  const multiple = shuffle(data.multiple_choice).slice(0, 10);
-  const judge = shuffle(data.judgment).slice(0, 10);
-
-  allQuestions = [...single, ...multiple, ...judge];
-  currentQuestions = shuffle(allQuestions);
-  currentIndex = 0;
+// 生成一套题
+function generateNewSet() {
   score = 0;
+  currentIndex = 0;
+  selectedOptions.clear();
+
+  const single = getRandomSubset(allQuestions.single_choice || [], 20);
+  const multi = getRandomSubset(allQuestions.multiple_choice || [], 10);
+  const judge = getRandomSubset(allQuestions.true_false || [], 10);
+
+  // 判断题自动添加选项
+  judge.forEach(q => {
+    if (!q.options || q.options.length === 0) {
+      q.options = ["A. 正确", "B. 错误"];
+    }
+  });
+
+  questions = [...single, ...multi, ...judge].sort(() => Math.random() - 0.5);
+
+  document.getElementById('restartBtn').style.display = 'none';
+  document.getElementById('submitBtn').style.display = 'inline-block';
   showQuestion();
 }
 
-function shuffle(arr) {
-  return arr.sort(() => Math.random() - 0.5);
-}
-
+// 显示题目
 function showQuestion() {
-  const container = document.getElementById("question-container");
-  const result = document.getElementById("result");
-  result.innerHTML = "";
+  const q = questions[currentIndex];
+  document.getElementById('progress').innerText = `第 ${currentIndex + 1} / ${questions.length} 题`;
+  document.getElementById('question').innerText = `${q.id || currentIndex + 1}. ${q.question}`;
+  const optionsDiv = document.getElementById('options');
+  optionsDiv.innerHTML = '';
 
-  if (currentIndex >= currentQuestions.length) {
-    container.innerHTML = `<p>你已完成本套题目！🎉</p>
-      <p>总得分：${score}/${currentQuestions.length}</p>
-      <button onclick="loadQuestions()">再来一套</button>`;
-    document.getElementById("submit-btn").style.display = "none";
-    return;
-  }
+  q.options.forEach(opt => {
+    const div = document.createElement('div');
+    div.className = 'option';
+    div.textContent = opt;
+    div.onclick = () => selectOption(div, opt);
+    optionsDiv.appendChild(div);
+  });
 
-  const q = currentQuestions[currentIndex];
-  let optionsHTML = "";
-
-  if (Array.isArray(q.options)) {
-    q.options.forEach((opt, i) => {
-      const optId = `opt-${i}`;
-      const inputType = q.answer.length > 1 ? "checkbox" : "radio";
-      optionsHTML += `
-        <label>
-          <input type="${inputType}" name="option" value="${opt.charAt(0)}"> ${opt}
-        </label>`;
-    });
-  }
-
-  container.innerHTML = `
-    <div class="question">
-      <p><b>第 ${currentIndex + 1} 题：</b>${q.question}</p>
-      <div class="options">${optionsHTML}</div>
-      <div id="feedback" class="feedback"></div>
-    </div>
-  `;
+  document.getElementById('result').innerText = '';
+  isAnswered = false;
+  selectedOptions.clear();
+  document.getElementById('submitBtn').innerText = '提交';
 }
 
-document.getElementById("submit-btn").addEventListener("click", () => {
-  const q = currentQuestions[currentIndex];
-  const selected = Array.from(document.querySelectorAll('input[name="option"]:checked'))
-    .map(el => el.value)
-    .sort()
-    .join('');
+// 选项选择
+function selectOption(div, optionText) {
+  if (isAnswered) return;
 
-  const feedback = document.getElementById("feedback");
-  if (!selected) {
-    feedback.innerHTML = `<span class="wrong">请选择答案！</span>`;
+  const q = questions[currentIndex];
+  const type = detectType(q);
+
+  if (type === 'multiple') {
+    if (selectedOptions.has(optionText)) {
+      selectedOptions.delete(optionText);
+      div.classList.remove('selected');
+    } else {
+      selectedOptions.add(optionText);
+      div.classList.add('selected');
+    }
+  } else {
+    document.querySelectorAll('.option').forEach(o => o.classList.remove('selected'));
+    div.classList.add('selected');
+    selectedOptions.clear();
+    selectedOptions.add(optionText);
+  }
+}
+
+// 检测题型
+function detectType(q) {
+  if (q.options.length === 2 && (q.options[0].includes('正确') || q.options[0].includes('错误'))) {
+    return 'true_false';
+  } else if (Array.isArray(q.answer) && q.answer.length > 1) {
+    return 'multiple';
+  }
+  return 'single';
+}
+
+// 提交答案
+document.getElementById('submitBtn').addEventListener('click', () => {
+  if (isAnswered) {
+    nextQuestion();
     return;
   }
 
-  if (selected === q.answer) {
-    score++;
-    feedback.innerHTML = `<span class="correct">✅ 回答正确！</span>`;
-  } else {
-    feedback.innerHTML = `<span class="wrong">❌ 回答错误，正确答案是：${q.answer}</span>`;
+  if (selectedOptions.size === 0) {
+    alert('请选择答案！');
+    return;
   }
 
-  // 延迟显示下一题
-  setTimeout(() => {
-    currentIndex++;
-    showQuestion();
-  }, 1500);
+  const q = questions[currentIndex];
+  const resultDiv = document.getElementById('result');
+  let correctAnswers = [];
+
+  if (Array.isArray(q.answer)) {
+    correctAnswers = q.answer.map(a => a.trim());
+  } else {
+    correctAnswers = [q.answer.trim()];
+  }
+
+  const userAnswers = Array.from(selectedOptions).map(o => o.trim().charAt(0));
+
+  const isCorrect =
+    userAnswers.length === correctAnswers.length &&
+    userAnswers.every(a => correctAnswers.includes(a));
+
+  if (isCorrect) {
+    resultDiv.style.color = 'green';
+    resultDiv.innerText = `✅ 回答正确！正确答案：${correctAnswers.join(',')}`;
+    score++;
+  } else {
+    resultDiv.style.color = 'red';
+    resultDiv.innerText = `❌ 回答错误！正确答案：${correctAnswers.join(',')}`;
+  }
+
+  isAnswered = true;
+  document.getElementById('submitBtn').innerText = '下一题';
+
+  // 高亮正确答案
+  document.querySelectorAll('.option').forEach(o => {
+    const optLetter = o.textContent.trim().charAt(0);
+    if (correctAnswers.includes(optLetter)) {
+      o.style.background = '#c8f7c5';
+      o.style.borderColor = '#28a745';
+    }
+  });
+
+  setTimeout(nextQuestion, 1500);
 });
 
+// 下一题
+function nextQuestion() {
+  currentIndex++;
+  if (currentIndex < questions.length) {
+    showQuestion();
+  } else {
+    showFinalResult();
+  }
+}
+
+// 结束页
+function showFinalResult() {
+  document.getElementById('question').innerText = `🎯 本次答题结束`;
+  document.getElementById('options').innerHTML = '';
+  document.getElementById('submitBtn').style.display = 'none';
+  document.getElementById('restartBtn').style.display = 'inline-block';
+  document.getElementById('progress').innerText = '';
+  document.getElementById('result').style.color = '#333';
+  document.getElementById('result').innerText = `你共答对 ${score} / ${questions.length} 题，正确率 ${(score / questions.length * 100).toFixed(1)}%`;
+}
+
+// 再来一套
+document.getElementById('restartBtn').addEventListener('click', generateNewSet);
+
+// 启动
 loadQuestions();
